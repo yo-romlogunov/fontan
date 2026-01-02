@@ -327,7 +327,7 @@
             <div class="modal-body">
                 <div class="about-title">FONTAN AE</div>
                 <div class="about-desc">Text to shapes animation tool for After Effects.</div>
-                <div class="about-meta">Version: 0.2</div>
+                <div class="about-meta">Version: 0.32</div>
                 <div class="about-list-title">Supported Fonts</div>
                 <ul class="about-list">
                     <li>Inter</li>
@@ -358,9 +358,14 @@
                 </button>
             </div>
             <div class="modal-body">
-                <div class="about-title">Status</div>
-                <div class="about-desc">You're up to date.</div>
-                <div class="about-meta">Last checked: just now</div>
+                <div class="about-title" id="updates-title">Status</div>
+                <div class="about-desc" id="updates-desc">You're up to date.</div>
+                <div class="about-meta" id="updates-meta">Last checked: just now</div>
+                <div class="about-actions updates-actions" id="updates-actions">
+                    <button class="btn btn-primary is-hidden" id="btn-update-download" type="button">Download</button>
+                    <button class="btn btn-secondary is-hidden" id="btn-update-apply" type="button">Apply on restart</button>
+                    <button class="btn btn-secondary is-hidden" id="btn-update-release" type="button">Open Release</button>
+                </div>
             </div>
         </div>
     </div>

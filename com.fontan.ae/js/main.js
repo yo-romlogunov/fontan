@@ -4,6 +4,16 @@
 
     var csInterface = new CSInterface();
     var EXTENSION_ID = "com.fontan.ae.panel";
+    var CURRENT_VERSION = "0.32";
+    var UPDATE_API = "https://api.github.com/repos/yo-romlogunov/fontan/releases/latest";
+    var lastUpdateCheckAt = 0;
+    var RELEASES_URL = "https://github.com/yo-romlogunov/fontan/releases";
+    var nodeRequire = (window.cep_node && window.cep_node.require) ? window.cep_node.require : (typeof require === 'function' ? require : null);
+    var fs = nodeRequire ? nodeRequire('fs') : null;
+    var path = nodeRequire ? nodeRequire('path') : null;
+    var os = nodeRequire ? nodeRequire('os') : null;
+    var https = nodeRequire ? nodeRequire('https') : null;
+    var childProcess = nodeRequire ? nodeRequire('child_process') : null;
 
     // State
     var state = {
@@ -14,6 +24,9 @@
         vectorPreviewData: null,
         vectorPreviewTarget: null,
         vectorCustomIndices: {},
+        updateInfo: null,
+        updateStagingPath: null,
+        updateStagingVersion: null,
         vectorToggles: { k1: true, k2: true, k3: true, k4: true }
     };
 
@@ -41,6 +54,12 @@
         btnUpdatesClose: document.getElementById('btn-updates-close'),
         aboutModal: document.getElementById('about-modal'),
         updatesModal: document.getElementById('updates-modal'),
+        updatesTitle: document.getElementById('updates-title'),
+        updatesDesc: document.getElementById('updates-desc'),
+        updatesMeta: document.getElementById('updates-meta'),
+        btnUpdateDownload: document.getElementById('btn-update-download'),
+        btnUpdateApply: document.getElementById('btn-update-apply'),
+        btnUpdateRelease: document.getElementById('btn-update-release'),
 
         // Inputs
         cbAlign: document.getElementById('cb-align'),
@@ -94,6 +113,8 @@
     init();
 
     function init() {
+        applyPendingUpdateIfAny();
+        loadStagedUpdateInfo();
         // Theme handling
         updateThemeWithAppSkinInfo();
         csInterface.addEventListener(CSInterface.THEME_COLOR_CHANGED_EVENT, updateThemeWithAppSkinInfo);
@@ -116,6 +137,712 @@
         var hostEnv = csInterface.getHostEnvironment();
         var skin = hostEnv.appSkinInfo;
         // Logic to sync with AE theme if needed, but we use a custom dark theme primarily
+    }
+
+    function normalizeVersion(v) {
+        if (!v) return '';
+        var s = String(v).trim();
+        if (s.charAt(0).toLowerCase() === 'v') s = s.slice(1);
+        s = s.split(/[\s\-]/)[0];
+        return s;
+    }
+
+    function compareVersions(a, b) {
+        var pa = normalizeVersion(a).split('.');
+        var pb = normalizeVersion(b).split('.');
+        var len = Math.max(pa.length, pb.length);
+        for (var i = 0; i < len; i++) {
+            var na = parseInt(pa[i] || '0', 10);
+            var nb = parseInt(pb[i] || '0', 10);
+            if (na > nb) return 1;
+            if (na < nb) return -1;
+        }
+        return 0;
+    }
+
+    function formatCheckTime(ts) {
+        var d = new Date(ts);
+        var hh = String(d.getHours()).padStart(2, '0');
+        var mm = String(d.getMinutes()).padStart(2, '0');
+        return hh + ':' + mm;
+    }
+
+    function resetUpdateButtons() {
+        if (els.btnUpdateDownload) {
+            els.btnUpdateDownload.classList.add('is-hidden');
+            els.btnUpdateDownload.removeAttribute('data-link');
+        }
+        if (els.btnUpdateApply) {
+            els.btnUpdateApply.classList.add('is-hidden');
+        }
+        if (els.btnUpdateRelease) {
+            els.btnUpdateRelease.classList.add('is-hidden');
+            els.btnUpdateRelease.removeAttribute('data-link');
+        }
+    }
+
+    function showReleaseButton(url) {
+        if (!els.btnUpdateRelease) return;
+        els.btnUpdateRelease.classList.remove('is-hidden');
+        if (url) els.btnUpdateRelease.setAttribute('data-link', url);
+    }
+
+    function checkForUpdates(force) {
+        if (!els.updatesDesc || !els.updatesMeta) return;
+        var now = Date.now();
+        if (!force && now - lastUpdateCheckAt < 60000) return;
+        lastUpdateCheckAt = now;
+
+        state.updateInfo = null;
+        var stagedInfo = loadStagedUpdateInfo();
+
+        els.updatesDesc.textContent = "Checking for updates...";
+        els.updatesMeta.textContent = "Current: " + CURRENT_VERSION + " • Last checked: " + formatCheckTime(now);
+        resetUpdateButtons();
+
+        var xhr = new XMLHttpRequest();
+        xhr.open('GET', UPDATE_API, true);
+        xhr.setRequestHeader('Accept', 'application/vnd.github+json');
+        xhr.onreadystatechange = function () {
+            if (xhr.readyState !== 4) return;
+            if (xhr.status >= 200 && xhr.status < 300) {
+                try {
+                    var data = JSON.parse(xhr.responseText || '{}');
+                    var latestTag = data.tag_name || data.name || '';
+                    var latest = normalizeVersion(latestTag);
+                    var cmp = latest ? compareVersions(latest, CURRENT_VERSION) : 0;
+                    if (!latest) {
+                        els.updatesDesc.textContent = "Could not parse latest version.";
+                        els.updatesMeta.textContent = "Current: " + CURRENT_VERSION + " • Last checked: " + formatCheckTime(now);
+                        return;
+                    }
+                    var releaseUrl = data.html_url || RELEASES_URL;
+                    var downloadUrl = '';
+                    var assetName = '';
+                    if (data.assets && data.assets.length) {
+                        for (var i = 0; i < data.assets.length; i++) {
+                            var asset = data.assets[i];
+                            if (!asset || !asset.browser_download_url) continue;
+                            var name = asset.name || '';
+                            if (/\.zip$/i.test(name) || /\.zxp$/i.test(name) || i === 0) {
+                                downloadUrl = asset.browser_download_url;
+                                assetName = name;
+                                break;
+                            }
+                        }
+                    }
+                    if (!downloadUrl) {
+                        if (latestTag) {
+                            downloadUrl = "https://github.com/yo-romlogunov/fontan/archive/refs/tags/" +
+                                encodeURIComponent(latestTag) + ".zip";
+                        } else if (data.zipball_url) {
+                            downloadUrl = data.zipball_url;
+                        }
+                    }
+                    state.updateInfo = {
+                        latest: latest,
+                        downloadUrl: downloadUrl,
+                        releaseUrl: releaseUrl,
+                        assetName: assetName
+                    };
+
+                    var stagedVersion = stagedInfo && stagedInfo.version ? stagedInfo.version : '';
+                    var stagedMatchesLatest = stagedVersion && compareVersions(stagedVersion, latest) === 0;
+                    if (cmp > 0) {
+                        els.updatesDesc.textContent = "Update available: v" + latest;
+                        if (els.btnUpdates) els.btnUpdates.classList.add('is-alert');
+                        if (stagedMatchesLatest) {
+                            if (els.btnUpdateApply) els.btnUpdateApply.classList.remove('is-hidden');
+                        } else if (downloadUrl) {
+                            if (els.btnUpdateDownload) {
+                                els.btnUpdateDownload.classList.remove('is-hidden');
+                                els.btnUpdateDownload.setAttribute('data-link', downloadUrl);
+                            }
+                        }
+                        showReleaseButton(releaseUrl);
+                    } else {
+                        els.updatesDesc.textContent = "You're up to date.";
+                        if (els.btnUpdates) els.btnUpdates.classList.remove('is-alert');
+                        if (stagedVersion && compareVersions(stagedVersion, CURRENT_VERSION) > 0) {
+                            els.updatesDesc.textContent = "Update ready to apply: v" + stagedVersion;
+                            if (els.btnUpdateApply) els.btnUpdateApply.classList.remove('is-hidden');
+                            showReleaseButton(releaseUrl);
+                        }
+                    }
+                    els.updatesMeta.textContent = "Current: " + CURRENT_VERSION + " • Latest: " + latest +
+                        " • Last checked: " + formatCheckTime(now);
+                } catch (e) {
+                    els.updatesDesc.textContent = "Unable to check updates.";
+                    els.updatesMeta.textContent = "Current: " + CURRENT_VERSION + " • Last checked: " + formatCheckTime(now);
+                    if (stagedInfo && stagedInfo.version) {
+                        els.updatesDesc.textContent = "Update ready to apply: v" + stagedInfo.version;
+                        if (els.btnUpdateApply) els.btnUpdateApply.classList.remove('is-hidden');
+                        showReleaseButton(stagedInfo.releaseUrl || RELEASES_URL);
+                    } else {
+                        showReleaseButton(RELEASES_URL);
+                    }
+                }
+            } else {
+                els.updatesDesc.textContent = "Unable to check updates.";
+                els.updatesMeta.textContent = "Current: " + CURRENT_VERSION + " • Last checked: " + formatCheckTime(now);
+                if (stagedInfo && stagedInfo.version) {
+                    els.updatesDesc.textContent = "Update ready to apply: v" + stagedInfo.version;
+                    if (els.btnUpdateApply) els.btnUpdateApply.classList.remove('is-hidden');
+                    showReleaseButton(stagedInfo.releaseUrl || RELEASES_URL);
+                } else {
+                    showReleaseButton(RELEASES_URL);
+                }
+            }
+        };
+        xhr.onerror = function () {
+            els.updatesDesc.textContent = "Unable to check updates.";
+            els.updatesMeta.textContent = "Current: " + CURRENT_VERSION + " • Last checked: " + formatCheckTime(now);
+            if (stagedInfo && stagedInfo.version) {
+                els.updatesDesc.textContent = "Update ready to apply: v" + stagedInfo.version;
+                if (els.btnUpdateApply) els.btnUpdateApply.classList.remove('is-hidden');
+                showReleaseButton(stagedInfo.releaseUrl || RELEASES_URL);
+            } else {
+                showReleaseButton(RELEASES_URL);
+            }
+        };
+        xhr.send();
+    }
+
+    function normalizeFsPath(p) {
+        if (!p) return p;
+        var s = String(p);
+        if (s.indexOf('file:') === 0) {
+            try { s = decodeURIComponent(s); } catch (e) {}
+            if (s.indexOf('file:///') === 0) {
+                s = s.slice(7);
+            } else if (s.indexOf('file://') === 0) {
+                s = s.slice(7);
+            } else if (s.indexOf('file:/') === 0) {
+                s = s.slice(6);
+            }
+            if (/^\/[A-Za-z]:/.test(s)) s = s.slice(1);
+        }
+        return s;
+    }
+
+    function getExtensionPaths() {
+        if (!csInterface || !path || typeof SystemPath === 'undefined') return null;
+        var extPath = normalizeFsPath(csInterface.getSystemPath(SystemPath.EXTENSION));
+        if (!extPath) return null;
+        return {
+            extPath: extPath,
+            extParent: path.dirname(extPath),
+            extName: path.basename(extPath)
+        };
+    }
+
+    function getUserExtensionsRoot() {
+        if (!path || !os) return null;
+        var platform = (typeof process !== 'undefined' && process.platform) ? process.platform : 'darwin';
+        if (platform.indexOf('win') === 0) {
+            var base = (typeof process !== 'undefined' && process.env && process.env.APPDATA) ?
+                process.env.APPDATA : path.join(os.homedir(), 'AppData', 'Roaming');
+            return path.join(base, 'Adobe', 'CEP', 'extensions');
+        }
+        if (platform === 'darwin') {
+            return path.join(os.homedir(), 'Library', 'Application Support', 'Adobe', 'CEP', 'extensions');
+        }
+        return path.join(os.homedir(), '.config', 'Adobe', 'CEP', 'extensions');
+    }
+
+    function ensureDir(dirPath) {
+        if (!fs || !dirPath) return false;
+        try {
+            fs.mkdirSync(dirPath, { recursive: true });
+            return true;
+        } catch (e) {
+            return false;
+        }
+    }
+
+    function canWriteDir(dirPath) {
+        if (!fs || !dirPath) return false;
+        try {
+            if (fs.constants && fs.constants.W_OK) {
+                fs.accessSync(dirPath, fs.constants.W_OK);
+            } else if (fs.accessSync) {
+                fs.accessSync(dirPath, 2);
+            } else {
+                var testFile = path.join(dirPath, '.write-test-' + Date.now());
+                fs.writeFileSync(testFile, '1');
+                fs.unlinkSync(testFile);
+            }
+            return true;
+        } catch (e) {
+            return false;
+        }
+    }
+
+    function getUpdateMetaRoot(paths) {
+        if (!paths) return null;
+        if (paths.extParent && ensureDir(paths.extParent) && canWriteDir(paths.extParent)) {
+            return paths.extParent;
+        }
+        var userRoot = getUserExtensionsRoot();
+        if (userRoot && ensureDir(userRoot) && canWriteDir(userRoot)) {
+            return userRoot;
+        }
+        return paths.extParent || userRoot;
+    }
+
+    function getStagedInfoPath(metaRoot) {
+        return path.join(metaRoot, '.fontan_update_staged.json');
+    }
+
+    function getPendingInfoPath(metaRoot) {
+        return path.join(metaRoot, '.fontan_update_pending.json');
+    }
+
+    function readJsonFile(filePath) {
+        if (!fs || !filePath || !fs.existsSync(filePath)) return null;
+        try {
+            var raw = fs.readFileSync(filePath, 'utf8');
+            return JSON.parse(raw);
+        } catch (e) {
+            return null;
+        }
+    }
+
+    function writeJsonFile(filePath, data) {
+        if (!fs || !filePath) return;
+        try {
+            fs.writeFileSync(filePath, JSON.stringify(data, null, 2));
+        } catch (e) {
+            // ignore
+        }
+    }
+
+    function loadStagedUpdateInfo() {
+        if (!fs || !path) return null;
+        var paths = getExtensionPaths();
+        if (!paths) {
+            state.updateStagingPath = null;
+            state.updateStagingVersion = null;
+            return null;
+        }
+        var metaRoot = getUpdateMetaRoot(paths);
+        if (!metaRoot) {
+            state.updateStagingPath = null;
+            state.updateStagingVersion = null;
+            return null;
+        }
+        var infoPath = getStagedInfoPath(metaRoot);
+        var info = readJsonFile(infoPath);
+        if (!info || !info.stagingDir || !fs.existsSync(info.stagingDir)) {
+            state.updateStagingPath = null;
+            state.updateStagingVersion = null;
+            return null;
+        }
+        state.updateStagingPath = info.stagingDir;
+        state.updateStagingVersion = info.version || null;
+        return info;
+    }
+
+    function clearStagedUpdateInfo() {
+        if (!fs || !path) return;
+        var paths = getExtensionPaths();
+        if (!paths) return;
+        var metaRoot = getUpdateMetaRoot(paths);
+        if (!metaRoot) return;
+        var infoPath = getStagedInfoPath(metaRoot);
+        if (fs.existsSync(infoPath)) {
+            try { fs.unlinkSync(infoPath); } catch (e) {}
+        }
+    }
+
+    function loadPendingUpdateInfo() {
+        if (!fs || !path) return null;
+        var paths = getExtensionPaths();
+        if (!paths) return null;
+        var metaRoot = getUpdateMetaRoot(paths);
+        if (!metaRoot) return null;
+        var infoPath = getPendingInfoPath(metaRoot);
+        return readJsonFile(infoPath);
+    }
+
+    function clearPendingUpdateInfo() {
+        if (!fs || !path) return;
+        var paths = getExtensionPaths();
+        if (!paths) return;
+        var metaRoot = getUpdateMetaRoot(paths);
+        if (!metaRoot) return;
+        var infoPath = getPendingInfoPath(metaRoot);
+        if (fs.existsSync(infoPath)) {
+            try { fs.unlinkSync(infoPath); } catch (e) {}
+        }
+    }
+
+    function applyPendingUpdateIfAny() {
+        if (!fs || !path) return;
+        var pending = loadPendingUpdateInfo();
+        if (!pending || !pending.stagingDir || !pending.targetDir) return;
+        var stagingDir = normalizeFsPath(pending.stagingDir);
+        var targetDir = normalizeFsPath(pending.targetDir);
+        if (!fs.existsSync(stagingDir)) {
+            clearPendingUpdateInfo();
+            return;
+        }
+        var paths = getExtensionPaths();
+        if (!paths || !paths.extPath) return;
+        var allowed = (targetDir === paths.extPath);
+        if (!allowed) {
+            var userRoot = getUserExtensionsRoot();
+            if (userRoot) {
+                var userRootNorm = path.resolve(userRoot);
+                var targetNorm = path.resolve(targetDir);
+                if (targetNorm.indexOf(userRootNorm) === 0 && path.basename(targetNorm) === paths.extName) {
+                    allowed = true;
+                }
+            }
+        }
+        if (!allowed) return;
+
+        var backupDir = targetDir + '.bak';
+        try {
+            if (fs.existsSync(backupDir)) removeDirRecursive(backupDir);
+            if (fs.existsSync(targetDir)) fs.renameSync(targetDir, backupDir);
+            fs.renameSync(stagingDir, targetDir);
+            clearPendingUpdateInfo();
+            clearStagedUpdateInfo();
+            state.updateStagingPath = null;
+            state.updateStagingVersion = null;
+        } catch (e) {
+            try {
+                if (!fs.existsSync(targetDir) && fs.existsSync(backupDir)) {
+                    fs.renameSync(backupDir, targetDir);
+                }
+            } catch (e2) {}
+        }
+    }
+
+    function startUpdateDownload() {
+        if (!state.updateInfo || !state.updateInfo.downloadUrl) {
+            if (els.updatesDesc) els.updatesDesc.textContent = "No downloadable package found. Use the release page.";
+            showReleaseButton(state.updateInfo ? state.updateInfo.releaseUrl : RELEASES_URL);
+            return;
+        }
+        if (!fs || !path || !os || !https || !childProcess) {
+            if (els.updatesDesc) els.updatesDesc.textContent = "Auto-update unavailable. Use the release page.";
+            showReleaseButton(state.updateInfo.releaseUrl || RELEASES_URL);
+            return;
+        }
+
+        var latest = state.updateInfo.latest;
+        if (state.updateStagingVersion === latest && state.updateStagingPath && fs.existsSync(state.updateStagingPath)) {
+            if (els.updatesDesc) els.updatesDesc.textContent = "Update already downloaded. Click Apply on restart.";
+            if (els.btnUpdateApply) els.btnUpdateApply.classList.remove('is-hidden');
+            showReleaseButton(state.updateInfo.releaseUrl);
+            return;
+        }
+
+        if (els.updatesDesc) els.updatesDesc.textContent = "Downloading update...";
+        resetUpdateButtons();
+        showReleaseButton(state.updateInfo.releaseUrl);
+
+        var tempRoot = path.join(os.tmpdir(), 'fontan-update-' + Date.now());
+        var zipPath = path.join(tempRoot, 'fontan-update.zip');
+        try {
+            fs.mkdirSync(tempRoot, { recursive: true });
+        } catch (e) {}
+
+        downloadFile(state.updateInfo.downloadUrl, zipPath, function (err) {
+            if (err) {
+                if (els.updatesDesc) {
+                    els.updatesDesc.textContent = "Download failed: " + (err && err.message ? err.message : err);
+                }
+                console.error("Update download failed", err);
+                showReleaseButton(state.updateInfo.releaseUrl || RELEASES_URL);
+                if (els.btnUpdateDownload) {
+                    els.btnUpdateDownload.classList.remove('is-hidden');
+                    els.btnUpdateDownload.setAttribute('data-link', state.updateInfo.downloadUrl);
+                }
+                return;
+            }
+            if (els.updatesDesc) els.updatesDesc.textContent = "Preparing update...";
+            stageUpdateFromZip(zipPath, latest, state.updateInfo.releaseUrl, function (stageErr, stagingDir) {
+                if (stageErr) {
+                    if (els.updatesDesc) {
+                        els.updatesDesc.textContent = "Update failed to prepare: " +
+                            (stageErr && stageErr.message ? stageErr.message : stageErr);
+                    }
+                    console.error("Update staging failed", stageErr);
+                    showReleaseButton(state.updateInfo.releaseUrl || RELEASES_URL);
+                    if (els.btnUpdateDownload) {
+                        els.btnUpdateDownload.classList.remove('is-hidden');
+                        els.btnUpdateDownload.setAttribute('data-link', state.updateInfo.downloadUrl);
+                    }
+                    return;
+                }
+                state.updateStagingPath = stagingDir;
+                state.updateStagingVersion = latest;
+                if (els.updatesDesc) {
+                    var stagedInfo = loadStagedUpdateInfo();
+                    var targetDir = stagedInfo && stagedInfo.targetDir ? stagedInfo.targetDir : '';
+                    var usingUserRoot = false;
+                    if (targetDir) {
+                        var userRoot = getUserExtensionsRoot();
+                        if (userRoot) {
+                            try {
+                                usingUserRoot = path.resolve(targetDir).indexOf(path.resolve(userRoot)) === 0;
+                            } catch (e) {}
+                        }
+                    }
+                    els.updatesDesc.textContent = usingUserRoot ?
+                        "Update downloaded to user extensions. Click Apply on restart." :
+                        "Update downloaded. Click Apply on restart.";
+                }
+                if (els.btnUpdateApply) els.btnUpdateApply.classList.remove('is-hidden');
+                showReleaseButton(state.updateInfo.releaseUrl);
+            });
+        });
+    }
+
+    function scheduleUpdateApply() {
+        if (!fs || !path) return;
+        var stagedInfo = loadStagedUpdateInfo();
+        var stagingDir = state.updateStagingPath || (stagedInfo && stagedInfo.stagingDir);
+        if (!stagingDir || !fs.existsSync(stagingDir)) {
+            if (els.updatesDesc) els.updatesDesc.textContent = "No staged update found. Download the update first.";
+            return;
+        }
+        var paths = getExtensionPaths();
+        if (!paths || !paths.extPath) return;
+        var version = state.updateStagingVersion || (stagedInfo && stagedInfo.version) || (state.updateInfo && state.updateInfo.latest) || '';
+        var releaseUrl = (state.updateInfo && state.updateInfo.releaseUrl) || (stagedInfo && stagedInfo.releaseUrl) || RELEASES_URL;
+        var targetDir = (stagedInfo && stagedInfo.targetDir) ? stagedInfo.targetDir : paths.extPath;
+        var metaRoot = getUpdateMetaRoot(paths);
+        if (!metaRoot) return;
+        writeJsonFile(getPendingInfoPath(metaRoot), {
+            targetDir: targetDir,
+            stagingDir: stagingDir,
+            version: version,
+            releaseUrl: releaseUrl,
+            createdAt: Date.now()
+        });
+        if (els.updatesDesc) {
+            var usingUserRoot = false;
+            var userRoot = getUserExtensionsRoot();
+            if (userRoot) {
+                try {
+                    usingUserRoot = path.resolve(targetDir).indexOf(path.resolve(userRoot)) === 0;
+                } catch (e) {}
+            }
+            els.updatesDesc.textContent = usingUserRoot ?
+                "Update scheduled for user extensions. Restart After Effects to apply." :
+                "Update scheduled. Restart After Effects to apply.";
+        }
+        if (els.btnUpdateApply) els.btnUpdateApply.classList.add('is-hidden');
+        showReleaseButton(releaseUrl);
+    }
+
+    function downloadFile(url, destPath, done) {
+        if (!url || !fs || !path) return done(new Error("Invalid download request"));
+        var clientForUrl = function (u) {
+            if (u.indexOf('https://') === 0) return https;
+            if (u.indexOf('http://') === 0) return nodeRequire ? nodeRequire('http') : null;
+            return https;
+        };
+
+        var handled = false;
+        function finishOnce(err) {
+            if (handled) return;
+            handled = true;
+            done(err);
+        }
+
+        function request(u) {
+            var client = clientForUrl(u);
+            if (!client) return finishOnce(new Error("No HTTP client available"));
+            var req = client.get(u, function (res) {
+                if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+                    res.resume();
+                    request(res.headers.location);
+                    return;
+                }
+                if (res.statusCode !== 200) {
+                    res.resume();
+                    finishOnce(new Error("Download failed with status " + res.statusCode));
+                    return;
+                }
+                var file = fs.createWriteStream(destPath);
+                res.pipe(file);
+                file.on('finish', function () {
+                    file.close(function () {
+                        finishOnce();
+                    });
+                });
+                file.on('error', function (err) {
+                    try { file.close(); } catch (e) {}
+                    finishOnce(err);
+                });
+            });
+            req.on('error', function (err) {
+                finishOnce(err);
+            });
+        }
+
+        request(url);
+    }
+
+    function unzipToDir(zipPath, destDir, done) {
+        if (!childProcess) return done(new Error("Unzip unavailable"));
+        var isWin = (typeof process !== 'undefined' && process.platform && process.platform.indexOf('win') === 0);
+        var proc;
+        if (isWin) {
+            var esc = function (s) { return String(s).replace(/'/g, "''"); };
+            var cmd = "Expand-Archive -LiteralPath '" + esc(zipPath) + "' -DestinationPath '" + esc(destDir) + "' -Force";
+            proc = childProcess.spawn('powershell.exe', ['-NoProfile', '-Command', cmd], { stdio: 'ignore' });
+        } else {
+            var unzipPath = (fs && fs.existsSync('/usr/bin/unzip')) ? '/usr/bin/unzip' : 'unzip';
+            var attemptedDitto = false;
+            var runDitto = function () {
+                if (attemptedDitto) return done(new Error("Unzip failed"));
+                attemptedDitto = true;
+                if (fs && fs.existsSync('/usr/bin/ditto')) {
+                    var ditto = childProcess.spawn('/usr/bin/ditto', ['-x', '-k', zipPath, destDir], { stdio: 'ignore' });
+                    ditto.on('error', function (err) { done(err); });
+                    ditto.on('close', function (code) {
+                        if (code === 0) done();
+                        else done(new Error("Unzip failed"));
+                    });
+                } else {
+                    done(new Error("Unzip tool not found"));
+                }
+            };
+            proc = childProcess.spawn(unzipPath, ['-o', zipPath, '-d', destDir], { stdio: 'ignore' });
+            proc.on('error', function () { runDitto(); });
+            proc.on('close', function (code) {
+                if (code === 0) done();
+                else runDitto();
+            });
+        }
+        if (proc) {
+            proc.on('error', function (err) {
+                if (isWin) done(err);
+            });
+            if (isWin) {
+                proc.on('close', function (code) {
+                    if (code === 0) done();
+                    else done(new Error("Unzip failed"));
+                });
+            }
+        }
+    }
+
+    function findManifestRoot(startDir) {
+        if (!fs || !path || !startDir) return null;
+        var stack = [startDir];
+        while (stack.length) {
+            var dir = stack.pop();
+            var manifestPath = path.join(dir, 'CSXS', 'manifest.xml');
+            if (fs.existsSync(manifestPath)) return dir;
+            var entries;
+            try {
+                entries = fs.readdirSync(dir);
+            } catch (e) {
+                continue;
+            }
+            for (var i = 0; i < entries.length; i++) {
+                var name = entries[i];
+                var full = path.join(dir, name);
+                try {
+                    if (fs.statSync(full).isDirectory()) stack.push(full);
+                } catch (e2) {}
+            }
+        }
+        return null;
+    }
+
+    function stageUpdateFromZip(zipPath, version, releaseUrl, done) {
+        if (!fs || !path || !os) return done(new Error("Update staging unavailable"));
+        var paths = getExtensionPaths();
+        if (!paths || !paths.extParent || !paths.extName) return done(new Error("Extension path unavailable"));
+
+        var stagingRoot = paths.extParent;
+        var targetDir = paths.extPath;
+        if (!canWriteDir(stagingRoot)) {
+            var userRoot = getUserExtensionsRoot();
+            if (userRoot && ensureDir(userRoot) && canWriteDir(userRoot)) {
+                stagingRoot = userRoot;
+                targetDir = path.join(userRoot, paths.extName);
+            }
+        }
+
+        var extractDir = path.join(path.dirname(zipPath), 'extract');
+        try { fs.mkdirSync(extractDir, { recursive: true }); } catch (e) {}
+
+        unzipToDir(zipPath, extractDir, function (err) {
+            if (err) return done(err);
+            var root = findManifestRoot(extractDir);
+            if (!root) return done(new Error("No extension manifest found in package"));
+
+            var stagingDir = path.join(stagingRoot, paths.extName + '.update');
+            try {
+                ensureDir(stagingRoot);
+                if (fs.existsSync(stagingDir)) removeDirRecursive(stagingDir);
+                copyDirRecursive(root, stagingDir);
+            } catch (copyErr) {
+                return done(copyErr);
+            }
+
+            var metaRoot = getUpdateMetaRoot(paths);
+            if (!metaRoot) return done(new Error("Cannot write update metadata"));
+            writeJsonFile(getStagedInfoPath(metaRoot), {
+                stagingDir: stagingDir,
+                version: version || '',
+                releaseUrl: releaseUrl || RELEASES_URL,
+                targetDir: targetDir,
+                createdAt: Date.now()
+            });
+
+            try { removeDirRecursive(extractDir); } catch (e2) {}
+            try { if (fs.existsSync(zipPath)) fs.unlinkSync(zipPath); } catch (e3) {}
+
+            done(null, stagingDir);
+        });
+    }
+
+    function removeDirRecursive(target) {
+        if (!fs || !target || !fs.existsSync(target)) return;
+        if (fs.rmSync) {
+            fs.rmSync(target, { recursive: true, force: true });
+            return;
+        }
+        var entries = fs.readdirSync(target);
+        for (var i = 0; i < entries.length; i++) {
+            var name = entries[i];
+            var full = path.join(target, name);
+            try {
+                if (fs.statSync(full).isDirectory()) removeDirRecursive(full);
+                else fs.unlinkSync(full);
+            } catch (e) {}
+        }
+        try { fs.rmdirSync(target); } catch (e2) {}
+    }
+
+    function copyDirRecursive(src, dest) {
+        if (!fs || !path) return;
+        if (!fs.existsSync(dest)) fs.mkdirSync(dest, { recursive: true });
+        var entries = fs.readdirSync(src);
+        for (var i = 0; i < entries.length; i++) {
+            var name = entries[i];
+            var srcPath = path.join(src, name);
+            var destPath = path.join(dest, name);
+            var stat = fs.statSync(srcPath);
+            if (stat.isDirectory()) {
+                copyDirRecursive(srcPath, destPath);
+            } else {
+                if (fs.existsSync(destPath)) {
+                    try { fs.unlinkSync(destPath); } catch (e) {}
+                }
+                fs.copyFileSync(srcPath, destPath);
+            }
+        }
     }
 
     // --- Tab Handling ---
@@ -172,17 +899,14 @@
                 btn.addEventListener('click', function () {
                     var url = btn.getAttribute('data-link');
                     if (!url) return;
-                    if (csInterface && csInterface.openURLInDefaultBrowser) {
-                        csInterface.openURLInDefaultBrowser(url);
-                    } else {
-                        window.open(url);
-                    }
+                    openExternal(url);
                 });
             });
         }
         if (els.btnUpdates && els.updatesModal) {
             els.btnUpdates.addEventListener('click', function () {
                 els.updatesModal.classList.add('active');
+                checkForUpdates(true);
             });
         }
         if (els.btnUpdatesClose && els.updatesModal) {
@@ -193,6 +917,22 @@
         if (els.updatesModal) {
             els.updatesModal.addEventListener('click', function (e) {
                 if (e.target === els.updatesModal) els.updatesModal.classList.remove('active');
+            });
+        }
+        if (els.btnUpdateDownload) {
+            els.btnUpdateDownload.addEventListener('click', function () {
+                startUpdateDownload();
+            });
+        }
+        if (els.btnUpdateApply) {
+            els.btnUpdateApply.addEventListener('click', function () {
+                scheduleUpdateApply();
+            });
+        }
+        if (els.btnUpdateRelease) {
+            els.btnUpdateRelease.addEventListener('click', function () {
+                var url = els.btnUpdateRelease.getAttribute('data-link') || RELEASES_URL;
+                openExternal(url);
             });
         }
         if (els.btnVectorClose && els.vectorModal) {
@@ -225,6 +965,15 @@
         csInterface.evalScript(script, function (res) {
             if (callback) callback(res);
         });
+    }
+
+    function openExternal(url) {
+        if (!url) return;
+        if (csInterface && csInterface.openURLInDefaultBrowser) {
+            csInterface.openURLInDefaultBrowser(url);
+        } else {
+            window.open(url);
+        }
     }
 
     // -> Add Layers

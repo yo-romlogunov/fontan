@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<ExtensionManifest Version="9.0" ExtensionBundleId="com.fontan.ae" ExtensionBundleVersion="1.0.0" ExtensionBundleName="FONTAN AE" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+<ExtensionManifest Version="9.0" ExtensionBundleId="com.fontan.ae" ExtensionBundleVersion="0.32.0" ExtensionBundleName="FONTAN AE" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
     <ExtensionList>
-        <Extension Id="com.fontan.ae.panel" Version="0.1.0"/>
+        <Extension Id="com.fontan.ae.panel" Version="0.32.0"/>
     </ExtensionList>
 
     <ExecutionEnvironment>

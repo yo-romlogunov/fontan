@@ -475,6 +475,16 @@ textarea {
     width: 28px;
 }
 
+.btn-icon-only.is-alert {
+    color: var(--accent-color);
+    border-color: var(--accent-color);
+    box-shadow: 0 0 0 1px rgba(248, 36, 111, 0.35);
+}
+
+.btn-icon-only.is-alert svg {
+    color: var(--accent-color);
+}
+
 .btn-xs {
     padding: 4px 8px;
     font-size: 10px;
@@ -1070,6 +1080,10 @@ textarea {
     display: flex;
     gap: 8px;
     flex-wrap: wrap;
+}
+
+.updates-actions {
+    margin-top: 10px;
 }
 
 .curve-editor {
