@@ -901,6 +901,13 @@ textarea {
     padding: 12px;
 }
 
+.about-logo {
+    width: 140px;
+    height: auto;
+    display: block;
+    margin-bottom: 8px;
+}
+
 .about-title {
     font-size: 14px;
     font-weight: 600;

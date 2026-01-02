@@ -4,7 +4,7 @@
 
     var csInterface = new CSInterface();
     var EXTENSION_ID = "com.fontan.ae.panel";
-    var CURRENT_VERSION = "0.32";
+    var CURRENT_VERSION = "0.3";
     var UPDATE_API = "https://api.github.com/repos/yo-romlogunov/fontan/releases/latest";
     var lastUpdateCheckAt = 0;
     var RELEASES_URL = "https://github.com/yo-romlogunov/fontan/releases";
@@ -148,14 +148,30 @@
     }
 
     function compareVersions(a, b) {
-        var pa = normalizeVersion(a).split('.');
-        var pb = normalizeVersion(b).split('.');
+        var na = normalizeVersion(a);
+        var nb = normalizeVersion(b);
+        var decRe = /^(\d+)\.(\d+)$/;
+        var ma = decRe.exec(na);
+        var mb = decRe.exec(nb);
+        if (ma && mb) {
+            var majorA = parseInt(ma[1], 10);
+            var majorB = parseInt(mb[1], 10);
+            if (majorA === 0 && majorB === 0) {
+                var fa = parseFloat(na);
+                var fb = parseFloat(nb);
+                if (fa > fb) return 1;
+                if (fa < fb) return -1;
+                return 0;
+            }
+        }
+        var pa = na.split('.');
+        var pb = nb.split('.');
         var len = Math.max(pa.length, pb.length);
         for (var i = 0; i < len; i++) {
-            var na = parseInt(pa[i] || '0', 10);
-            var nb = parseInt(pb[i] || '0', 10);
-            if (na > nb) return 1;
-            if (na < nb) return -1;
+            var ia = parseInt(pa[i] || '0', 10);
+            var ib = parseInt(pb[i] || '0', 10);
+            if (ia > ib) return 1;
+            if (ia < ib) return -1;
         }
         return 0;
     }
@@ -969,11 +985,19 @@
 
     function openExternal(url) {
         if (!url) return;
-        if (csInterface && csInterface.openURLInDefaultBrowser) {
-            csInterface.openURLInDefaultBrowser(url);
-        } else {
-            window.open(url);
-        }
+        try {
+            if (window.cep && window.cep.util && window.cep.util.openURLInDefaultBrowser) {
+                window.cep.util.openURLInDefaultBrowser(url);
+                return;
+            }
+        } catch (e) {}
+        try {
+            if (csInterface && csInterface.openURLInDefaultBrowser) {
+                csInterface.openURLInDefaultBrowser(url);
+                return;
+            }
+        } catch (e2) {}
+        try { window.open(url); } catch (e3) {}
     }
 
     // -> Add Layers
