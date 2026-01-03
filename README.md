@@ -59,10 +59,3 @@ Enable CEP debug to load unsigned extensions and reload quickly.
 On macOS create:
 `~/Library/Preferences/com.adobe.CSXS.<cepVersion>.plist`
 with `PlayerDebugMode=1`.
-
-## Project Structure
-- `index.html` — panel UI
-- `js/main.js` — panel logic
-- `jsx/hostscript.jsx` — ExtendScript bridge
-- `css/styles.css` — styles
-- `CSXS/manifest.xml` — CEP manifest
