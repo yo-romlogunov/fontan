@@ -30,6 +30,8 @@
         vectorToggles: { k1: true, k2: true, k3: true, k4: true }
     };
 
+    var FV_MODE_ORDER = ["bottom", "top", "left", "right", "lock"];
+
     // DOM Elements
     var els = {
         tabs: document.querySelectorAll('.tab'),
@@ -47,6 +49,7 @@
         btnApply: document.getElementById('btn-apply'),
         btnRefresh: document.getElementById('btn-refresh'),
         btnApplyFv: document.getElementById('btn-apply-fv'),
+        btnAutoFix: document.getElementById('btn-autofix'),
         btnAnimSettings: document.getElementById('btn-anim-settings'),
         btnAbout: document.getElementById('btn-about'),
         btnAboutClose: document.getElementById('btn-about-close'),
@@ -890,6 +893,7 @@
         // Create Tab
         els.btnAdd.addEventListener('click', addSelectedLayers);
         els.btnRemove.addEventListener('click', removeSelectedLayer);
+        els.btnRemove.addEventListener('dblclick', clearLayerList);
         els.btnUp.addEventListener('click', moveLayerUp);
         els.btnDown.addEventListener('click', moveLayerDown);
         if (els.btnAnimSettings) {
@@ -973,6 +977,12 @@
         els.selectShape.addEventListener('change', loadGroupsForShape);
         if (els.btnApplyFv) {
             els.btnApplyFv.addEventListener('click', applyFirstVertex);
+        }
+        if (els.btnAutoFix) {
+            els.btnAutoFix.addEventListener('click', function () {
+                advanceFvMode();
+                applyFirstVertex();
+            });
         }
     }
 
@@ -1146,6 +1156,12 @@
         if (state.layers.length > 0 && !state.layers.find(l => l.base)) {
             state.layers[0].base = true;
         }
+        renderLayerList();
+    }
+
+    function clearLayerList() {
+        if (!state.layers.length) return;
+        state.layers = [];
         renderLayerList();
     }
 
@@ -1602,7 +1618,7 @@
             setStatus("Select groups or vector paths");
         }
 
-        var mode = (els.selectFvMode && els.selectFvMode.dataset.value) ? els.selectFvMode.dataset.value : "bottom";
+        var mode = getFvMode();
         if (mode === "lock") mode = "ref_firstkey";
 
         showLoading(true);
@@ -1857,26 +1873,35 @@
         updateVectorEditMode();
     }
 
+    function getFvMode() {
+        if (!els.selectFvMode) return "bottom";
+        return els.selectFvMode.value || "bottom";
+    }
+
+    function setFvMode(value) {
+        if (!els.selectFvMode) return;
+        var target = value || "bottom";
+        if (els.selectFvMode.querySelector('option[value="' + target + '"]')) {
+            els.selectFvMode.value = target;
+        } else {
+            els.selectFvMode.value = "bottom";
+        }
+    }
+
+    function advanceFvMode() {
+        var current = getFvMode();
+        var idx = FV_MODE_ORDER.indexOf(current);
+        if (idx < 0) idx = 0;
+        var next = FV_MODE_ORDER[(idx + 1) % FV_MODE_ORDER.length];
+        setFvMode(next);
+        return next;
+    }
+
     function setupFvModeSelect() {
         if (!els.selectFvMode) return;
-        var buttons = els.selectFvMode.querySelectorAll('button[data-value]');
-        if (!buttons.length) return;
-
-        function setMode(value) {
-            els.selectFvMode.dataset.value = value;
-            buttons.forEach(function (btn) {
-                btn.classList.toggle('active', btn.dataset.value === value);
-            });
+        if (!els.selectFvMode.value) {
+            els.selectFvMode.value = "bottom";
         }
-
-        buttons.forEach(function (btn) {
-            btn.addEventListener('click', function () {
-                setMode(btn.dataset.value || 'bottom');
-            });
-        });
-
-        var initValue = els.selectFvMode.dataset.value || 'bottom';
-        setMode(initValue);
     }
 
 })();

@@ -159,6 +159,213 @@
     return out;
   }
 
+  function ptAdd(a,b){ return [a[0] + (b?b[0]:0), a[1] + (b?b[1]:0)]; }
+  function ptSub(a,b){ return [a[0]-b[0], a[1]-b[1]]; }
+  function ptLerp(a,b,t){ return [a[0] + (b[0]-a[0])*t, a[1] + (b[1]-a[1])*t]; }
+  function cubicPoint(p0,p1,p2,p3,t){
+    var u = 1 - t;
+    var tt = t*t, uu = u*u;
+    var uuu = uu*u, ttt = tt*t;
+    return [
+      uuu*p0[0] + 3*uu*t*p1[0] + 3*u*tt*p2[0] + ttt*p3[0],
+      uuu*p0[1] + 3*uu*t*p1[1] + 3*u*tt*p2[1] + ttt*p3[1]
+    ];
+  }
+  function splitCubic(p0,p1,p2,p3,t){
+    var p01 = ptLerp(p0,p1,t);
+    var p12 = ptLerp(p1,p2,t);
+    var p23 = ptLerp(p2,p3,t);
+    var p012 = ptLerp(p01,p12,t);
+    var p123 = ptLerp(p12,p23,t);
+    var p0123 = ptLerp(p012,p123,t);
+    return {left:[p0,p01,p012,p0123], right:[p0123,p123,p23,p3]};
+  }
+  function splitCubicAtTs(p0,p1,p2,p3, ts){
+    var segs = [];
+    var cur = [p0,p1,p2,p3];
+    var prev = 0;
+    for (var i=0;i<ts.length;i++){
+      var t = ts[i];
+      var local = (t - prev) / (1 - prev);
+      var sp = splitCubic(cur[0], cur[1], cur[2], cur[3], local);
+      segs.push(sp.left);
+      cur = sp.right;
+      prev = t;
+    }
+    segs.push(cur);
+    return segs;
+  }
+  function approxSegmentLength(p0,p1,p2,p3, steps){
+    var len = 0;
+    var prev = cubicPoint(p0,p1,p2,p3,0);
+    for (var s=1;s<=steps;s++){
+      var t = s/steps;
+      var pt = cubicPoint(p0,p1,p2,p3,t);
+      var dx = pt[0]-prev[0], dy = pt[1]-prev[1];
+      len += Math.sqrt(dx*dx + dy*dy);
+      prev = pt;
+    }
+    return len;
+  }
+  function buildShapeFromSegments(segments, closed){
+    if (!segments || segments.length===0) return null;
+    var newV=[], newIn=[], newOut=[];
+    var start = segments[0][0];
+    newV.push([start[0], start[1]]);
+    newIn.push([0,0]);
+    newOut.push([0,0]);
+    for (var i=0;i<segments.length;i++){
+      var s = segments[i];
+      var p0=s[0], p1=s[1], p2=s[2], p3=s[3];
+      var curIdx = newV.length-1;
+      newOut[curIdx] = ptSub(p1,p0);
+      if (closed && i===segments.length-1){
+        newIn[0] = ptSub(p2,p3);
+      } else {
+        newV.push([p3[0], p3[1]]);
+        newIn.push(ptSub(p2,p3));
+        newOut.push([0,0]);
+      }
+    }
+    var out = new Shape();
+    out.closed = closed;
+    out.vertices = newV;
+    out.inTangents = newIn;
+    out.outTangents = newOut;
+    return out;
+  }
+  function increaseVertices(shapeVal, targetCount){
+    if (!shapeVal || !shapeVal.vertices) return shapeVal;
+    var v = shapeVal.vertices||[];
+    var n = v.length;
+    if (n < 2 || targetCount <= n) return shapeVal;
+    var closed = !!shapeVal.closed;
+    var ins = shapeVal.inTangents||[];
+    var outs = shapeVal.outTangents||[];
+    var segCount = closed ? n : (n-1);
+    if (segCount <= 0) return shapeVal;
+
+    var lens=[], total=0;
+    for (var i=0;i<segCount;i++){
+      var j = closed ? (i+1)%n : (i+1);
+      var p0 = v[i];
+      var p1 = ptAdd(v[i], outs[i]);
+      var p2 = ptAdd(v[j], ins[j]);
+      var p3 = v[j];
+      var len = approxSegmentLength(p0,p1,p2,p3,8);
+      lens[i]=len; total += len;
+    }
+
+    var addCount = targetCount - n;
+    var extra = [];
+    if (total <= 1e-7){
+      var base = Math.floor(addCount / segCount);
+      var rem = addCount - base*segCount;
+      for (var i2=0;i2<segCount;i2++) extra[i2] = base + (i2<rem ? 1 : 0);
+    } else {
+      var fracs=[], used=0;
+      for (var i3=0;i3<segCount;i3++){
+        var f = (lens[i3] / total) * addCount;
+        var c = Math.floor(f);
+        extra[i3] = c;
+        used += c;
+        fracs[i3] = f - c;
+      }
+      var rem2 = addCount - used;
+      if (rem2 > 0){
+        var idx=[];
+        for (var i4=0;i4<segCount;i4++) idx.push({i:i4, f:fracs[i4]});
+        idx.sort(function(a,b){ return b.f - a.f; });
+        for (var r=0;r<rem2;r++) extra[idx[r].i] += 1;
+      }
+    }
+
+    var segments = [];
+    for (var s=0;s<segCount;s++){
+      var j2 = closed ? (s+1)%n : (s+1);
+      var q0 = v[s];
+      var q1 = ptAdd(v[s], outs[s]);
+      var q2 = ptAdd(v[j2], ins[j2]);
+      var q3 = v[j2];
+      var parts = extra[s] + 1;
+      if (parts <= 1){
+        segments.push([q0,q1,q2,q3]);
+      } else {
+        var ts=[];
+        for (var t=1;t<parts;t++) ts.push(t/parts);
+        var segs = splitCubicAtTs(q0,q1,q2,q3, ts);
+        for (var m=0;m<segs.length;m++) segments.push(segs[m]);
+      }
+    }
+
+    return buildShapeFromSegments(segments, closed) || shapeVal;
+  }
+  function getPathValue(prop, comp){
+    var v = null;
+    try { v = prop.value; } catch(e){}
+    if (!v || !v.vertices || !v.vertices.length){
+      try { v = prop.valueAtTime(comp.time, false); } catch(e2){}
+    }
+    return v;
+  }
+  function normalizePathsByMaxVerts(shapesPaths, comp){
+    if (!shapesPaths || shapesPaths.length===0) return {minPaths:0, changed:0};
+    var minPaths = shapesPaths[0].length;
+    for (var i=1;i<shapesPaths.length;i++){
+      if (shapesPaths[i].length < minPaths) minPaths = shapesPaths[i].length;
+    }
+    if (minPaths <= 0) return {minPaths:0, changed:0};
+
+    var maxCounts=[];
+    for (var p=0;p<minPaths;p++) maxCounts[p]=0;
+    for (var s=0;s<shapesPaths.length;s++){
+      for (var p2=0;p2<minPaths;p2++){
+        var pv = getPathValue(shapesPaths[s][p2], comp);
+        var cnt = (pv && pv.vertices) ? pv.vertices.length : 0;
+        if (cnt > maxCounts[p2]) maxCounts[p2] = cnt;
+      }
+    }
+
+    var changed = 0;
+    for (var s2=0;s2<shapesPaths.length;s2++){
+      for (var p3=0;p3<minPaths;p3++){
+        var prop = shapesPaths[s2][p3];
+        var target = maxCounts[p3] || 0;
+        if (target <= 0) continue;
+        var nKeys = prop.numKeys|0;
+        if (nKeys > 0){
+          var times=[], vals=[], did=false;
+          for (var k=1;k<=nKeys;k++){
+            var kv = prop.keyValue(k);
+            var vc = (kv && kv.vertices) ? kv.vertices.length : 0;
+            if (vc > 0 && vc < target){
+              kv = increaseVertices(kv, target);
+              did = true;
+            }
+            times.push(prop.keyTime(k));
+            vals.push(kv);
+          }
+          if (did){
+            removeAllKeys(prop);
+            prop.setValuesAtTimes(times, vals);
+            changed++;
+          }
+        } else {
+          var v = getPathValue(prop, comp);
+          var vc2 = (v && v.vertices) ? v.vertices.length : 0;
+          if (vc2 > 0 && vc2 < target){
+            var nv = increaseVertices(v, target);
+            if (nv && nv.vertices && nv.vertices.length === target){
+              prop.setValue(nv);
+              changed++;
+            }
+          }
+        }
+      }
+    }
+    return {minPaths:minPaths, changed:changed, maxCounts:maxCounts};
+  }
+
   // collect all Bezier Paths in shape
   function allVectorPaths(shapeLayer){
     var out = [];
@@ -258,7 +465,7 @@
             var vv = A.keyValue(k);
             if (doAlign && refVal && vv && vv.closed && refVal.closed && (vv.vertices||[]).length === (refVal.vertices||[]).length){
               vv = alignToReference(vv, refVal);
-            } else if (doAlign && refVal && vv && sv.closed && (vv.vertices||[]).length !== (refVal.vertices||[]).length){
+            } else if (doAlign && refVal && vv && vv.closed && (vv.vertices||[]).length !== (refVal.vertices||[]).length){
               mismatchStats.count++;
             }
             at.push(A.keyTime(k)+dt);
@@ -876,6 +1083,8 @@
       // Collect paths for all shapes
       var shapesPaths = [];
       for (var si=0; si<shapes.length; si++){ shapesPaths.push(allVectorPaths(shapes[si])); }
+
+      normalizePathsByMaxVerts(shapesPaths, comp);
 
       var baseShape = shapes[0];
       var Pbase = shapesPaths[0];
